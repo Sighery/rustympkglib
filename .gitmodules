@@ -1,0 +1,3 @@
+[submodule "tree-sitter-bash"]
+	path = tree-sitter-bash
+	url = ../../tree-sitter/tree-sitter-bash.git
