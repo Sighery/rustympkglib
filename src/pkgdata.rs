@@ -78,44 +78,62 @@ impl Pkgname {
     /// assert!(Pkgname::new("-test-package@._+-").is_err());
     /// assert!(Pkgname::new(".test-package@._+-").is_err());
     /// assert!(Pkgname::new("test-package@._+-").is_ok());
+    /// assert!(Pkgname::new("('test-package@._+-' 'test-package_+-')").is_ok());
     /// ```
     pub fn new(pkgname: &str) -> Result<Pkgname, Error> {
         let names = match (
             pkgname.as_bytes()[0] as char,
             pkgname.as_bytes()[pkgname.len() - 1] as char,
         ) {
-            ('(', ')') => pkgname[1..pkgname.len()-1]
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .collect(),
+            ('(', ')') => {
+                let l = pkgname[1..pkgname.len() - 1].split(' ');
+                let o: Vec<String> = l
+                    .map(|s| s.to_string())
+                    .collect();
+                let err: Option<Error> = (&o).into_iter().rfold(None, |acc, s| {
+                    match (acc.is_some(), s.starts_with('\'') && s.ends_with('\'')) {
+                        (true, _) => acc,
+                        (_, true) => None,
+                        (_, false) => Some(Error::new(
+                            ErrorKind::ValidationError,
+                            "If pkgname is an array, all elements must start and end with `'`",
+                        )),
+                    }
+                });
+                if let Some(err) = err {
+                    return Err(err);
+                }
+                o.iter()
+                    .map(|s| {
+                        s.trim_end_matches('\'')
+                            .trim_start_matches('\'')
+                            .to_string()
+                    })
+                    .collect()
+            }
             _ => vec![pkgname.to_string()],
         };
         for name in &names {
-            let check = |x: char| {
-                match x {
-                    'a'..='z' | '0'..='9'|'@'|'.'|'_'|'+'|'-'  => false,
-                    _ => true,
-                }
-                    };
+            let check = |x: char| match x {
+                'a'..='z' | '0'..='9' | '@' | '.' | '_' | '+' | '-' => false,
+                _ => true,
+            };
             if let Some(_) = name.rfind(check) {
                 return Err(Error::new(
                     ErrorKind::ValidationError,
                     "pkgname can only contain lowercase alphanumerics or @._+-",
                 ));
             }
-
-            for (index, character) in name.chars().enumerate() {
-                if index == 0 && character == '-' {
-                    return Err(Error::new(
-                        ErrorKind::ValidationError,
-                        "pkgname can't start with hyphens",
-                    ));
-                } else if index == 0 && character == '.' {
-                    return Err(Error::new(
-                        ErrorKind::ValidationError,
-                        "pkgname can't start with dots",
-                    ));
-                }
+            if name.as_bytes()[0] as char == '-' {
+                return Err(Error::new(
+                    ErrorKind::ValidationError,
+                    "pkgname can't start with hyphens",
+                ));
+            } else if name.as_bytes()[0] as char == '.' {
+                return Err(Error::new(
+                    ErrorKind::ValidationError,
+                    "pkgname can't start with dots",
+                ));
             }
         }
         if names.len() == 1 {
@@ -499,7 +517,10 @@ mod tests {
 
     #[test]
     fn pkgname_multiple_should_work() {
-        assert!(Pkgname::new("(package12@._+-, p@ck@ge42)").unwrap() == Pkgname::Multiple(vec!["package12@._+-".to_string(), "p@ck@ge42".to_string()]));
+        assert!(
+            Pkgname::new("('package12@._+-' 'p@ck@ge42')").unwrap()
+                == Pkgname::Multiple(vec!["package12@._+-".to_string(), "p@ck@ge42".to_string()])
+        );
     }
 
     #[test]
