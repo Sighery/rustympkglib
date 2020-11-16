@@ -57,8 +57,11 @@ impl PartialEq<&str> for Pkgver {
 }
 
 /// Representation of the key `pkgname` in a PKGBUILD
-#[derive(Debug, Serialize, Eq)]
-pub struct Pkgname(String);
+#[derive(Debug, Serialize, Eq, PartialEq)]
+pub enum Pkgname {
+    Single(String),
+    Multiple(Vec<String>),
+}
 
 impl Pkgname {
     /// Validate and create a new `Pkgname` instance
@@ -76,55 +79,68 @@ impl Pkgname {
     /// assert!(Pkgname::new(".test-package@._+-").is_err());
     /// assert!(Pkgname::new("test-package@._+-").is_ok());
     /// ```
-    pub fn new(name: &str) -> Result<Pkgname, Error> {
-        let check = |x: char| {
-            x.is_alphabetic() && x.is_lowercase()
-                || x.is_numeric()
-                || x == '@'
-                || x == '.'
-                || x == '_'
-                || x == '+'
-                || x == '-'
+    pub fn new(pkgname: &str) -> Result<Pkgname, Error> {
+        let names = match (
+            pkgname.as_bytes()[0] as char,
+            pkgname.as_bytes()[pkgname.len() - 1] as char,
+        ) {
+            ('(', ')') => pkgname[1..pkgname.len()-1]
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect(),
+            _ => vec![pkgname.to_string()],
         };
-
-        for (index, character) in name.chars().enumerate() {
-            if index == 0 && character == '-' {
-                return Err(Error::new(
-                    ErrorKind::ValidationError,
-                    "pkgname can't start with hyphens",
-                ));
-            } else if index == 0 && character == '.' {
-                return Err(Error::new(
-                    ErrorKind::ValidationError,
-                    "pkgname can't start with dots",
-                ));
-            } else if !check(character) {
+        for name in &names {
+            let check = |x: char| {
+                match x {
+                    'a'..='z' | '0'..='9'|'@'|'.'|'_'|'+'|'-'  => false,
+                    _ => true,
+                }
+                    };
+            if let Some(_) = name.rfind(check) {
                 return Err(Error::new(
                     ErrorKind::ValidationError,
                     "pkgname can only contain lowercase alphanumerics or @._+-",
                 ));
             }
+
+            for (index, character) in name.chars().enumerate() {
+                if index == 0 && character == '-' {
+                    return Err(Error::new(
+                        ErrorKind::ValidationError,
+                        "pkgname can't start with hyphens",
+                    ));
+                } else if index == 0 && character == '.' {
+                    return Err(Error::new(
+                        ErrorKind::ValidationError,
+                        "pkgname can't start with dots",
+                    ));
+                }
+            }
         }
-
-        Ok(Pkgname(name.to_string()))
-    }
-}
-
-impl PartialEq for Pkgname {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
+        if names.len() == 1 {
+            Ok(Pkgname::Single(names[0].clone()))
+        } else {
+            Ok(Pkgname::Multiple(names))
+        }
     }
 }
 
 impl PartialEq<str> for Pkgname {
     fn eq(&self, other: &str) -> bool {
-        self.0[..] == other[..]
+        match self {
+            Pkgname::Single(str) => str[..] == other[..],
+            _ => false,
+        }
     }
 }
 
 impl PartialEq<&str> for Pkgname {
     fn eq(&self, other: &&str) -> bool {
-        self.0[..] == other[..]
+        match self {
+            Pkgname::Single(str) => str[..] == other[..],
+            _ => false,
+        }
     }
 }
 
@@ -482,6 +498,11 @@ mod tests {
     }
 
     #[test]
+    fn pkgname_multiple_should_work() {
+        assert!(Pkgname::new("(package12@._+-, p@ck@ge42)").unwrap() == Pkgname::Multiple(vec!["package12@._+-".to_string(), "p@ck@ge42".to_string()]));
+    }
+
+    #[test]
     fn pkgdata_source_with_pkgname_missing_should_fail() {
         let source_code = r#"
 pkgver=0.1.0
@@ -556,8 +577,8 @@ arch=('any')
 license=('MIT')
 "#;
 
-        let error = PkgData::from_source(&source_code).unwrap_err();
         let expected_error = Pkgname::new("INVALID-PACKAGE").unwrap_err();
+        let error = PkgData::from_source(&source_code).unwrap_err();
 
         assert_eq!(error, expected_error);
     }
