@@ -12,7 +12,7 @@ use serde::Serialize;
 pub struct Pkgver(String);
 
 impl Pkgver {
-    /// Validate and create a new `Pkgname` instance
+    /// Validate and create a new `Pkgver` instance
     ///
     /// The `pkgver` key in a PKGBUILD file must follow the following rules:
     /// * Can only contain letters, numbers, periods, and underscores
