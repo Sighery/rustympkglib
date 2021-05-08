@@ -1,8 +1,4 @@
-use tree_sitter::{Language, Node, Parser, Tree};
-
-extern "C" {
-    fn tree_sitter_bash() -> Language;
-}
+use tree_sitter::{Node, Parser, Tree};
 
 use crate::{Error, ErrorKind};
 
@@ -106,8 +102,7 @@ impl Pkgbuild {
     pub fn new(source: &str) -> Result<Pkgbuild, Error> {
         let mut parser = Parser::new();
 
-        let language = unsafe { tree_sitter_bash() };
-        parser.set_language(language).unwrap();
+        parser.set_language(tree_sitter_bash::language()).unwrap();
 
         let tree = match parser.parse(source, None) {
             Some(tree) => tree,
