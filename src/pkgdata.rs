@@ -56,14 +56,14 @@ impl PartialEq<&str> for Pkgver {
     }
 }
 
-/// Representation of the key `pkgname` in a PKGBUILD
+/// Representation of a `pkgname` value in a PKGBUILD
 #[derive(Debug, Serialize, Eq)]
 pub struct Pkgname(String);
 
 impl Pkgname {
     /// Validate and create a new `Pkgname` instance
     ///
-    /// The `pkgname` key in a PKGBUILD file must follow the following rules:
+    /// The `pkgname` value in a PKGBUILD file must follow the following rules:
     /// * Can't start with hyphens
     /// * Can't start with dots
     /// * Can only contain lowercase alphanumerics or `@._+-`
@@ -154,7 +154,7 @@ enum State<'a> {
 /// [Pkgver]: struct.Pkgver.html
 #[derive(Debug, Serialize)]
 pub struct PkgData {
-    pub pkgname: Pkgname,
+    pub pkgname: Vec<Pkgname>,
     pub pkgver: Pkgver,
     pub pkgrel: usize,
     pub epoch: Option<usize>,
@@ -201,7 +201,27 @@ impl PkgData {
     /// let pkgdata = PkgData::from_source(source_code).unwrap();
     /// println!("{:#?}", pkgdata);
     ///
-    /// assert_eq!(pkgdata.pkgname, "testing-package");
+    /// assert_eq!(pkgdata.pkgname, vec!["testing-package"]);
+    /// assert_eq!(pkgdata.pkgver, "0.1.0");
+    /// assert_eq!(pkgdata.pkgrel, 1);
+    /// assert_eq!(pkgdata.arch, vec!["any".to_string()]);
+    /// assert_eq!(pkgdata.license, Some(vec!["MIT".to_string()]));
+    /// ```
+    ///
+    /// ```rust
+    /// # use rustympkglib::pkgdata::PkgData;
+    /// let source_code = r#"
+    /// pkgname=('testing-package1' 'testing-package2')
+    /// pkgver=0.1.0
+    /// pkgrel=1
+    /// arch=(any)
+    /// license=("MIT")
+    /// "#;
+    ///
+    /// let pkgdata = PkgData::from_source(source_code).unwrap();
+    /// println!("{:#?}", pkgdata);
+    ///
+    /// assert_eq!(pkgdata.pkgname, vec!["testing-package1", "testing-package2"]);
     /// assert_eq!(pkgdata.pkgver, "0.1.0");
     /// assert_eq!(pkgdata.pkgrel, 1);
     /// assert_eq!(pkgdata.arch, vec!["any".to_string()]);
@@ -212,7 +232,7 @@ impl PkgData {
     /// [PKGBUILD.proto]: https://git.archlinux.org/pacman.git/tree/proto/PKGBUILD.proto
     #[allow(clippy::cognitive_complexity)]
     pub fn from_source(source_code: &str) -> Result<PkgData, Error> {
-        let mut pkgname: Option<Pkgname> = None;
+        let mut pkgname: Option<Vec<Pkgname>> = None;
         let mut pkgver: Option<Pkgver> = None;
         let mut pkgrel: Option<usize> = None;
         let mut arch: Option<Vec<String>> = None;
@@ -263,6 +283,10 @@ impl PkgData {
                     State::VariableAssignment(_) | State::NodeArray(_) => continue,
                     _ => state = State::Other,
                 },
+                r#"""# => match state {
+                    State::NodeArray(_) => continue,
+                    _ => state = State::Other,
+                },
                 "array" => match state {
                     State::VariableAssignment(variable) => {
                         state = State::NodeArray(variable);
@@ -276,7 +300,7 @@ impl PkgData {
 
                     match state {
                         State::VariableAssignment(variable) => match variable {
-                            "pkgname" => pkgname = Some(Pkgname::new(text)?),
+                            "pkgname" => pkgname = Some(vec![Pkgname::new(text)?]),
                             "pkgver" => pkgver = Some(Pkgver::new(text)?),
                             "pkgrel" => {
                                 pkgrel = Some(text.parse::<usize>().map_err(|_| {
@@ -299,6 +323,10 @@ impl PkgData {
                             _ => eprintln!("Unknown variable `{}`", variable),
                         },
                         State::NodeArray(variable) => match variable {
+                            "pkgname" => match &mut pkgname {
+                                Some(array) => array.push(Pkgname::new(text)?),
+                                None => pkgname = Some(vec![Pkgname::new(text)?]),
+                            },
                             "arch" => match &mut arch {
                                 Some(array) => array.push(text.to_string()),
                                 None => arch = Some(vec![text.to_string()]),
@@ -386,7 +414,7 @@ impl PkgData {
             None => {
                 return Err(Error::new(
                     ErrorKind::InvalidPKGBUILDError,
-                    "pkgname key must exist",
+                    "pkgname key must exist and have at least one value",
                 ))
             }
         };
@@ -493,8 +521,82 @@ license=('MIT')
         assert!(pkgdata.is_err());
 
         let error = pkgdata.unwrap_err();
-        let expected_error = Error::new(ErrorKind::InvalidPKGBUILDError, "pkgname key must exist");
+        let expected_error = Error::new(
+            ErrorKind::InvalidPKGBUILDError,
+            "pkgname key must exist and have at least one value",
+        );
         assert_eq!(error, expected_error);
+    }
+
+    #[test]
+    fn pkgdata_source_with_pkgname_empty_array_should_fail() {
+        let source_code = r#"
+pkgname=()
+pkgver=0.1.0
+pkgrel=1
+arch=('any')
+license=('MIT')
+"#;
+        let pkgdata = PkgData::from_source(&source_code);
+        assert!(pkgdata.is_err());
+
+        let error = pkgdata.unwrap_err();
+        let expected_error = Error::new(
+            ErrorKind::InvalidPKGBUILDError,
+            "pkgname key must exist and have at least one value",
+        );
+        assert_eq!(error, expected_error);
+    }
+
+    #[test]
+    fn pkgdata_source_with_pkgname_single_quote_array_should_work() {
+        let source_code = r#"
+pkgname=('testing-package1' 'testing-package2')
+pkgver=0.1.0
+pkgrel=1
+arch=('any')
+license=('MIT')
+"#;
+        let pkgdata = PkgData::from_source(&source_code).expect("this should have passed");
+
+        assert_eq!(
+            pkgdata.pkgname,
+            vec!["testing-package1", "testing-package2"]
+        );
+    }
+
+    #[test]
+    fn pkgdata_source_with_pkgname_double_quote_array_should_work() {
+        let source_code = r#"
+pkgname=("testing-package1" "testing-package2")
+pkgver=0.1.0
+pkgrel=1
+arch=('any')
+license=('MIT')
+"#;
+        let pkgdata = PkgData::from_source(&source_code).expect("this should have passed");
+
+        assert_eq!(
+            pkgdata.pkgname,
+            vec!["testing-package1", "testing-package2"]
+        );
+    }
+
+    #[test]
+    fn pkgdata_source_with_pkgname_no_quote_array_should_work() {
+        let source_code = r#"
+pkgname=(testing-package1 testing-package2)
+pkgver=0.1.0
+pkgrel=1
+arch=('any')
+license=('MIT')
+"#;
+        let pkgdata = PkgData::from_source(&source_code).expect("this should have passed");
+
+        assert_eq!(
+            pkgdata.pkgname,
+            vec!["testing-package1", "testing-package2"]
+        );
     }
 
     #[test]
@@ -628,7 +730,7 @@ prepare() {
 
         let pkgdata = PkgData::from_source(&source_code).unwrap();
 
-        assert_eq!(pkgdata.pkgname, "testing-package");
+        assert_eq!(pkgdata.pkgname, vec!["testing-package"]);
         assert_eq!(pkgdata.pkgver, "0.1.0");
         assert_eq!(pkgdata.pkgrel, 1);
         assert_eq!(pkgdata.arch, vec!["any"]);
@@ -646,8 +748,8 @@ pkgrel=1
 pkgdesc="Unofficial Terraform Njalla provider plugin"
 url='https://github.com/Sighery/terraform-provider-njalla'
 arch=('x86_64')
-license=('MIT')
-makedepends=('go')
+license=("MIT")
+makedepends=(go)
 source=(
 	"$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz"
 )
@@ -673,7 +775,7 @@ package() {
 
         let pkgdata = PkgData::from_source(&source_code).expect("this should have passed");
 
-        assert_eq!(pkgdata.pkgname, "terraform-provider-njalla");
+        assert_eq!(pkgdata.pkgname, vec!["terraform-provider-njalla"]);
         assert_eq!(pkgdata.pkgver, "0.7.0");
         assert_eq!(pkgdata.pkgrel, 1);
         assert_eq!(
