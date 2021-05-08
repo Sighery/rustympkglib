@@ -279,7 +279,7 @@ impl PkgData {
                     }
                     _ => continue,
                 },
-                "=" | "(" => match state {
+                "=" | "(" | "${" | "}" | "expansion" => match state {
                     State::VariableAssignment(_) | State::NodeArray(_) => continue,
                     _ => state = State::Other,
                 },
