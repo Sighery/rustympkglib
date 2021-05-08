@@ -128,6 +128,56 @@ impl PartialEq<&str> for Pkgname {
     }
 }
 
+/// Representation of a `pkgbase` value in a PKGBUILD
+#[derive(Debug, Serialize, Eq)]
+pub struct Pkgbase(String);
+
+impl Pkgbase {
+    /// Validate and create a new `Pkgbase` instance
+    ///
+    /// The `pkgbase` value in a PKGBUILD file must follow the following rules:
+    /// * Can't start with hyphens
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use rustympkglib::pkgdata::Pkgbase;
+    /// assert!(Pkgbase::new("-test-PaCkAGe@._+-&*").is_err());
+    /// assert!(Pkgbase::new(".TeSt-PaCkAGe@._+-&*").is_ok());
+    /// assert!(Pkgbase::new("TEST-PACKAGE@._+-&*").is_ok());
+    /// ```
+    pub fn new(base: &str) -> Result<Pkgbase, Error> {
+        let first = base.chars().next().unwrap();
+
+        if first == '-' {
+            return Err(Error::new(
+                ErrorKind::ValidationError,
+                "pkgbase can't start with hyphens",
+            ));
+        }
+
+        Ok(Pkgbase(base.to_string()))
+    }
+}
+
+impl PartialEq for Pkgbase {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl PartialEq<str> for Pkgbase {
+    fn eq(&self, other: &str) -> bool {
+        self.0[..] == other[..]
+    }
+}
+
+impl PartialEq<&str> for Pkgbase {
+    fn eq(&self, other: &&str) -> bool {
+        self.0[..] == other[..]
+    }
+}
+
 /// Used to keep track of the progress when walking the nodes tree
 #[derive(Debug)]
 enum State<'a> {
@@ -147,13 +197,16 @@ enum State<'a> {
 ///
 /// Most fields are optional (values are `Option`), while a few are always required. In
 /// particular, `pkgname` and `pkgver`, as well as required, must follow certain rules as well.
-/// Check [Pkgname][] and [Pkgver][] for more information.
+/// Check [Pkgname][] and [Pkgver][] for more information. Other fields are optional, but when
+/// set, must follow certain rules. Check [Pkgbase][].
 ///
 /// [PKGBUILD wiki]: https://wiki.archlinux.org/index.php/PKGBUILD
 /// [Pkgname]: struct.Pkgname.html
 /// [Pkgver]: struct.Pkgver.html
+/// [Pkgbase]: struct.Pkgbase.html
 #[derive(Debug, Serialize)]
 pub struct PkgData {
+    pub pkgbase: Option<Pkgbase>,
     pub pkgname: Vec<Pkgname>,
     pub pkgver: Pkgver,
     pub pkgrel: usize,
@@ -211,6 +264,7 @@ impl PkgData {
     /// ```rust
     /// # use rustympkglib::pkgdata::PkgData;
     /// let source_code = r#"
+    /// pkgbase=testing-package
     /// pkgname=('testing-package1' 'testing-package2')
     /// pkgver=0.1.0
     /// pkgrel=1
@@ -221,6 +275,7 @@ impl PkgData {
     /// let pkgdata = PkgData::from_source(source_code).unwrap();
     /// println!("{:#?}", pkgdata);
     ///
+    /// assert_eq!(pkgdata.pkgbase.unwrap(), "testing-package");
     /// assert_eq!(pkgdata.pkgname, vec!["testing-package1", "testing-package2"]);
     /// assert_eq!(pkgdata.pkgver, "0.1.0");
     /// assert_eq!(pkgdata.pkgrel, 1);
@@ -237,6 +292,7 @@ impl PkgData {
         let mut pkgrel: Option<usize> = None;
         let mut arch: Option<Vec<String>> = None;
 
+        let mut pkgbase: Option<Pkgbase> = None;
         let mut epoch: Option<usize> = None;
         let mut pkgdesc: Option<String> = None;
         let mut url: Option<String> = None;
@@ -300,6 +356,7 @@ impl PkgData {
 
                     match state {
                         State::VariableAssignment(variable) => match variable {
+                            "pkgbase" => pkgbase = Some(Pkgbase::new(text)?),
                             "pkgname" => pkgname = Some(vec![Pkgname::new(text)?]),
                             "pkgver" => pkgver = Some(Pkgver::new(text)?),
                             "pkgrel" => {
@@ -447,12 +504,13 @@ impl PkgData {
         };
 
         Ok(PkgData {
+            pkgbase,
             pkgname,
             pkgver,
             pkgrel,
-            arch,
             epoch,
             pkgdesc,
+            arch,
             url,
             license,
             depends,
@@ -507,6 +565,16 @@ mod tests {
     #[test]
     fn pkgname_expected_should_work() {
         assert!(Pkgname::new("package12@._+-").is_ok());
+    }
+
+    #[test]
+    fn pkgbase_starts_with_hyphen_should_fail() {
+        assert!(Pkgbase::new("-test-PaCkAGe@._+-&*").is_err());
+    }
+
+    #[test]
+    fn pkgbase_expected_should_work() {
+        assert!(Pkgbase::new(".TeSt-PaCkAGe@._+-&*").is_ok());
     }
 
     #[test]
@@ -738,7 +806,7 @@ prepare() {
     }
 
     #[test]
-    fn pkgdata_expected_should_work() {
+    fn pkgdata_simple_should_work() {
         // Taken from https://github.com/Sighery/terraform-provider-njalla-pkgbuild
         let source_code = r##"
 # Maintainer: Sighery
@@ -802,6 +870,7 @@ package() {
             ])
         );
 
+        assert_eq!(pkgdata.pkgbase, None);
         assert_eq!(pkgdata.epoch, None);
         assert_eq!(pkgdata.depends, None);
         assert_eq!(pkgdata.optdepends, None);
@@ -814,6 +883,155 @@ package() {
         assert_eq!(pkgdata.sha224sums, None);
         assert_eq!(pkgdata.sha384sums, None);
         assert_eq!(pkgdata.sha512sums, None);
+        assert_eq!(pkgdata.b2sums, None);
+    }
+
+    #[test]
+    fn pkgdata_complex_should_work() {
+        // Taken from https://aur.archlinux.org/cgit/aur.git/tree/PKGBUILD?h=droidcam&id=a38db4187bbb01b949da451c17d224816de91493
+        let source_code = r##"
+# Maintainer: AwesomeHaircut <jesusbalbastro at gmail com>
+# Maintainer: Mateusz Gozdek <mgozdekof@gmail.com>
+# Contributor: Rein Fernhout <public@reinfernhout.xyz>
+# Past Contributor: James An <james@jamesan.ca>
+
+pkgbase=droidcam
+pkgname=('droidcam' 'v4l2loopback-dc-dkms')
+pkgver=1.7.3
+pkgrel=1
+epoch=1
+pkgdesc='A tool for using your android device as a wireless/usb webcam'
+arch=('x86_64')
+url="https://github.com/aramg/${pkgbase}"
+license=('GPL')
+makedepends=('gtk3' 'ffmpeg' 'libusbmuxd')
+
+source=("${pkgbase}.desktop"
+        "dkms.conf"
+        "${pkgbase}.conf"
+        "${pkgbase}-${pkgver}.zip::${url}/archive/v${pkgver}.zip"
+)
+
+sha512sums=('72d21aa2d7eecc9bb070aaf7059a671246feb22f9c39b934a5463a4839f9347050de00754e5031dbc44f78eb2731f58f0cd2fcf781bc241f6fbd1abb4308b7ee'
+            '27848dc6825c965c0aaac8e86220c3916ba20df6d941f5f05caecbf9c329ee744ee883bd2638ba58fe0dc3f40a8ae804dafbfbbe2efc23237e2b5450606cb78d'
+            '74415b349bf8b2d1bb8181906f4254416d6223c5c42951185051bf3dd3e2f780db3441078ebff4a670eb0ffc76cc08f3b36851e0824c55a7f70136ce4d0240bc'
+            '3934033dac931277a2f8ff348bcaa39b0cfe3e73885acd28f34b4b4efd8ce0b8606f23493b92206b5a7d3a2e1a2e1726d1d9ec33cd3f1876d1e6806dfb59c74f')
+
+prepare() {
+  # Generate the module loading configuration files
+  echo "options v4l2loopback_dc width=640 height=480" >| "${pkgbase}.modprobe.conf"
+}
+
+build() {
+  cd ${pkgbase}-${pkgver}
+
+  # All JPEG* parameters are needed to use shared version of libturbojpeg instead of
+  # static one.
+  #
+  # Also libusbmuxd requires an override while linking.
+  make JPEG_DIR="" JPEG_INCLUDE="" JPEG_LIB="" JPEG=$(pkg-config --libs --cflags libturbojpeg) USBMUXD=-lusbmuxd-2.0
+}
+
+package_droidcam() {
+  depends=('alsa-lib' 'libjpeg-turbo' 'ffmpeg' 'v4l2loopback-dc-dkms' 'libusbmuxd')
+  optdepends=('gtk3: use GUI version in addition to CLI interface' 'libappindicator-gtk3: use GUI version in addition to CLI interface')
+
+  pushd ${pkgbase}-${pkgver}
+
+  # Install droidcam program files
+  install -Dm755 "${pkgbase}" "$pkgdir/usr/bin/${pkgbase}"
+  install -Dm755 "${pkgbase}-cli" "$pkgdir/usr/bin/${pkgbase}-cli"
+  install -Dm644 icon2.png "${pkgdir}/usr/share/pixmaps/${pkgbase}.png"
+  install -Dm644 icon2.png "${pkgdir}/opt/droidcam-icon.png"
+  install -Dm644 "${srcdir}/${pkgbase}.desktop" "${pkgdir}/usr/share/applications/${pkgbase}.desktop"
+  install -Dm644 "${srcdir}/${pkgbase}.conf" "${pkgdir}/etc/modules-load.d/${pkgbase}.conf"
+  install -Dm644 README.md "${pkgdir}/usr/share/licenses/${pkgbase}/LICENSE"
+}
+
+package_v4l2loopback-dc-dkms() {
+  depends=('dkms')
+  backup=("etc/modprobe.d/${pkgbase}.conf")
+
+  _pkgname=v4l2loopback-dc
+  local install_dir="${pkgdir}/usr/src/${_pkgname}-${pkgver}"
+
+  # Copy dkms.conf
+  install -Dm644 dkms.conf "${install_dir}/dkms.conf"
+
+  # Set name and version
+  sed -e "s/@_PKGNAME@/${_pkgname}/" -e "s/@PKGVER@/${pkgver}/" -i "${install_dir}/dkms.conf"
+
+  # Install module loading configuration
+  install -Dm644 "${pkgbase}.modprobe.conf" "${pkgdir}/etc/modprobe.d/${pkgbase}.conf"
+
+  # Install module source
+  cd ${pkgbase}-${pkgver}/v4l2loopback
+
+  for d in $(find . -type d); do
+    install -dm755 "${install_dir}/${d}"
+  done
+
+  for f in $(find . -type f ! -name '.gitignore'); do
+    install -m644 "${f}" "${install_dir}/${f}"
+  done
+}
+"##;
+
+        let pkgdata = PkgData::from_source(&source_code).expect("this should have passed");
+
+        assert_eq!(pkgdata.pkgbase.unwrap(), "droidcam");
+        assert_eq!(pkgdata.pkgname, vec!["droidcam", "v4l2loopback-dc-dkms"]);
+        assert_eq!(pkgdata.pkgver, "1.7.3");
+        assert_eq!(pkgdata.pkgrel, 1);
+        assert_eq!(pkgdata.epoch, Some(1));
+        assert_eq!(
+            pkgdata.pkgdesc,
+            Some("A tool for using your android device as a wireless/usb webcam".to_string())
+        );
+        assert_eq!(
+            pkgdata.url,
+            Some("https://github.com/aramg/${pkgbase}".to_string())
+        );
+        assert_eq!(pkgdata.arch, vec!["x86_64"]);
+        assert_eq!(pkgdata.license, Some(vec!["GPL".to_string()]));
+        assert_eq!(
+            pkgdata.makedepends,
+            Some(vec![
+                "gtk3".to_string(),
+                "ffmpeg".to_string(),
+                "libusbmuxd".to_string()
+            ])
+        );
+        assert_eq!(
+            pkgdata.source,
+            Some(vec![
+                "${pkgbase}.desktop".to_string(),
+                "dkms.conf".to_string(),
+                "${pkgbase}.conf".to_string(),
+                "${pkgbase}-${pkgver}.zip::${url}/archive/v${pkgver}.zip".to_string(),
+            ])
+        );
+        assert_eq!(
+            pkgdata.sha512sums,
+            Some(vec![
+                "72d21aa2d7eecc9bb070aaf7059a671246feb22f9c39b934a5463a4839f9347050de00754e5031dbc44f78eb2731f58f0cd2fcf781bc241f6fbd1abb4308b7ee".to_string(),
+                "27848dc6825c965c0aaac8e86220c3916ba20df6d941f5f05caecbf9c329ee744ee883bd2638ba58fe0dc3f40a8ae804dafbfbbe2efc23237e2b5450606cb78d".to_string(),
+                "74415b349bf8b2d1bb8181906f4254416d6223c5c42951185051bf3dd3e2f780db3441078ebff4a670eb0ffc76cc08f3b36851e0824c55a7f70136ce4d0240bc".to_string(),
+                "3934033dac931277a2f8ff348bcaa39b0cfe3e73885acd28f34b4b4efd8ce0b8606f23493b92206b5a7d3a2e1a2e1726d1d9ec33cd3f1876d1e6806dfb59c74f".to_string(),
+            ])
+        );
+
+        assert_eq!(pkgdata.depends, None);
+        assert_eq!(pkgdata.optdepends, None);
+        assert_eq!(pkgdata.checkdepends, None);
+        assert_eq!(pkgdata.provides, None);
+        assert_eq!(pkgdata.conflicts, None);
+        assert_eq!(pkgdata.replaces, None);
+        assert_eq!(pkgdata.validpgpkeys, None);
+        assert_eq!(pkgdata.md5sums, None);
+        assert_eq!(pkgdata.sha224sums, None);
+        assert_eq!(pkgdata.sha256sums, None);
+        assert_eq!(pkgdata.sha384sums, None);
         assert_eq!(pkgdata.b2sums, None);
     }
 }

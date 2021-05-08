@@ -13,6 +13,7 @@ pub mod pkgdata;
 /// A list of possible PKGBUILD/makepkg error kinds used in `rustympkglib`.
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
+#[allow(clippy::upper_case_acronyms)]
 pub enum ErrorKind {
     /// Error trying to validate some field or value. For example: `pkgname`s that contain illegal
     /// characters.
