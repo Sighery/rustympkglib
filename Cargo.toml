@@ -12,5 +12,5 @@ categories = ["parser-implementations"]
 
 [dependencies]
 tree-sitter = "0.19"
-tree-sitter-bash = "0.19"
+tree-sitter-bash = "0.20"
 serde = { version = "1.0", features = ["derive"] }
